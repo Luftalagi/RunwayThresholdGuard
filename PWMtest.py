@@ -1,5 +1,6 @@
 import serial
 import time
+import machine
 
 def sendMsg(msg:str):
     try:

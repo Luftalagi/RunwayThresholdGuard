@@ -116,6 +116,7 @@ def FindNearestStateVector() -> StateVector | int:
         airplaneCoord: CartCoord = PolarCoord(sv.latitude, sv.longitude).toCartesian(RUNWAY_START)
 
         if airplaneCoord is None:
+            print("airplane state cord is removed")
             return None, None
 
        # print(f"AIRPLANECOORD{airplaneCoord}")
