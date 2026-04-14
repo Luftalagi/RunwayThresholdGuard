@@ -7,19 +7,24 @@ import json
 import os
 import serial
 
-#dot product is being weird
-
 from pathlib import Path
 current_directory = Path.cwd()
 
 RUNWAY_START, RUNWAY_END, airportBoundary = None, None, None
 print("Current Working Directory:", current_directory)
 
-
-
-_CREDENTIALS_PATH = "credentials.json"
-_has_credentials = os.path.exists(_CREDENTIALS_PATH)
-
+class Distance:
+    def __init__(self, distance):
+        self.distance : float = distance
+    
+    @staticmethod
+    def toCartesian(distance):
+        return distance / 111.32
+    
+    @staticmethod
+    def toKm(distance):
+        return distance * 111.32
+    
 class PolarCoord:
     def __init__(self, Lat: float, Lon: float):
         self.Lat = Lat
@@ -57,7 +62,7 @@ class CartCoord:
     
     def magnitude(self):
         return math.sqrt((self.X ** 2) + (self.Y ** 2) + (self.Z ** 2))
-    
+
 def LoadJSON():
     try:
         with open('locations.json', 'r') as f:
@@ -83,61 +88,75 @@ def SetupAirport(airportName:str, runway:str):
 
     return RUNWAY_START, RUNWAY_END, airportBoundary
 
+#make this fail if there are no env variables
 def _make_api():
     load_dotenv()
     client_id = os.getenv("LUFTALAGI_CLIENT_ID")
     client_secret = os.getenv("LUFTALAGI_CLIENT_SECRET")
-    if _has_credentials:
-        return OpenSkyApi(client_id=client_id, client_secret=client_secret)
-    else:
-        print("NO credntials")
-    return OpenSkyApi()
+    return OpenSkyApi(client_id=client_id, client_secret=client_secret)
 
 def FindNearestStateVector() -> StateVector | int:
-    neabyStateVectors : list[StateVector] = api.get_states(
+    neabyStateVectors : list[StateVector] = MY_API.get_states(
         int(time.time()),
         None,
         airportBoundary
     )
+
+    print(neabyStateVectors)
+    if not neabyStateVectors:
+        print("No nearby state vectors found.")
+        return None, None
     
-    print(f"Function runway start: {RUNWAY_START}")
     start_cart = RUNWAY_START.toCartesian(ref=RUNWAY_START)
     end_cart   = RUNWAY_END.toCartesian(ref=RUNWAY_START) 
 
     runwayDirection = (end_cart - start_cart)
-    nearestStateVector, distance = None, 10*100
+    nearestStateVector, distance = None, None
 
-    airborne = [sv for sv in neabyStateVectors.states if not sv.on_ground and sv.baro_altitude is not None and sv.baro_altitude > 100 and sv.baro_altitude < 1000]  # CHANGED
-    
-    print(airborne)
+    #Landing aircraft show a baro altitude of -50
+    airborne = [sv for sv in neabyStateVectors.states if not sv.on_ground and sv.baro_altitude is not None and sv.baro_altitude > 0 and sv.baro_altitude < 1000]
+
     for sv in airborne:  
-        if nearestStateVector is None:
-             return None, None
         airplaneCoord: CartCoord = PolarCoord(sv.latitude, sv.longitude).toCartesian(RUNWAY_START)
 
         if airplaneCoord is None:
-            print("airplane state cord is removed")
-            return None, None
-
-       # print(f"AIRPLANECOORD{airplaneCoord}")
-        print(f"{sv.callsign} dot: {airplaneCoord.dot(runwayDirection)}")
+            print(f"Could not convert airplane coordinates for {sv.callsign}")
+            continue
 
         magnitude = (start_cart - airplaneCoord).magnitude()
         if airplaneCoord.dot(runwayDirection) >  -0.97:
             continue
 
-        if magnitude < distance:
+        if distance is None or magnitude < distance:
             nearestStateVector = sv
             distance = magnitude
 
-    return nearestStateVector, (start_cart - airplaneCoord).magnitude()
+    return nearestStateVector, distance
 
-api = _make_api()
+def FindNearestAircraft():
+   nearestPlane, distance = FindNearestStateVector()
+   if nearestPlane:
+        print("Nearest Plane Callsign:", nearestPlane.callsign)
+        print("Distance to Runway Threshold km:", Distance.toKm(distance))
+        DistanceScaling = min(1, distance/MAX_DIST) 
+
+        print(f"Distance Scaling: {distance/MAX_DIST}")
+
+        LightsToIlluminate = math.floor(NUMBER_OF_LIGHTS * DistanceScaling)
+        FinalLightPower = NUMBER_OF_LIGHTS * DistanceScaling - LightsToIlluminate
+
+        print(f"Lights to Illuminate: {LightsToIlluminate}")
+        print(f"Final Light Power: {FinalLightPower}")
+   else:
+        print("No planes on final to selected runway found.")
+
+MAX_DIST = Distance.toCartesian(3)
+NUMBER_OF_LIGHTS = 4
+CALL_DELAY = 5
 RUNWAY_START, RUNWAY_END, airportBoundary = SetupAirport(airportName="miami", runway="09")
+MY_API = _make_api()
 
-MAX_DIST = 3
-nearestPlane, distance = FindNearestStateVector()
-if nearestPlane:
-    print(f"NEAREST PLANE: {nearestPlane.callsign, distance*60}")
-else:
-    print("NO NEARBY AIRCRAFT")
+while True:
+    FindNearestAircraft()
+    time.sleep(CALL_DELAY)
+
